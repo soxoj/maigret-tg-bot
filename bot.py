@@ -151,6 +151,6 @@ with TelegramClient('name', API_ID, API_HASH) as client:
                     await event.reply('Unexpected error has been occurred. '
                                       f'Write a message {ADMIN_USERNAME}, he will fix it.')
 
-
-    client.send_message(ADMIN_USERNAME, 'Go!')
+    # uncomment to send you message on each script launch
+    # client.send_message(ADMIN_USERNAME, 'Go!')
     client.run_until_disconnected()
