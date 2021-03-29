@@ -1,10 +1,9 @@
 import logging
-import os
 import re
-from maigret.maigret import maigret
+
+import maigret
 from maigret.result import QueryStatus
 from maigret.sites import MaigretDatabase
-from mock import Mock
 from telethon.sync import TelegramClient, events
 
 API_ID = os.getenv('API_ID')
@@ -14,47 +13,33 @@ MAIGRET_DB_URL = 'https://raw.githubusercontent.com/soxoj/maigret/main/maigret/r
 USERNAME_REGEXP = r'^[a-zA-Z0-9-_\.]{5,}$'
 ADMIN_USERNAME = '@soxoj'
 
+# top popular sites from the Maigret database
 TOP_SITES_COUNT = 1500
+# Maigret HTTP requests timeout
 TIMEOUT = 30
-MAX_TG_MSG_CHARS = 4000
 
-DB = MaigretDatabase().load_from_url(MAIGRET_DB_URL)
+
+def setup_logger(log_level, name):
+    logger = logging.getLogger(name)
+    logger.setLevel(log_level)
+    return logger
 
 
 async def maigret_search(username):
     """
         Main Maigret search function
     """
-    global DB
+    logger = setup_logger(logging.WARNING, 'maigret')
 
-    log_level = logging.WARNING
-    logging.basicConfig(
-        format='[%(filename)s:%(lineno)d] %(levelname)-3s  %(asctime)s %(message)s',
-        datefmt='%H:%M:%S',
-        level=log_level
-    )
-    logger = logging.getLogger('maigret')
-    logger.setLevel(log_level)
+    db = MaigretDatabase().load_from_url(MAIGRET_DB_URL)
 
-    # workaround to update database from git master
-    try:
-        db = MaigretDatabase().load_from_url(MAIGRET_DB_URL)
-        DB = db
-    except Exception as e:
-        logger.error(e)
-        db = DB
+    sites = db.ranked_sites_dict(top=TOP_SITES_COUNT)
 
-    site_data = db.ranked_sites_dict(top=TOP_SITES_COUNT)
-    # can be object with editing tg msg handler to show search progress
-    query_notify = Mock()
-
-    results = await maigret(username,
-                            dict(site_data),
-                            query_notify,
-                            timeout=TIMEOUT,
-                            logger=logger,
-                            no_progressbar=True,
-                            )
+    results = await maigret.search(username=username,
+                                   site_dict=sites,
+                                   timeout=TIMEOUT,
+                                   logger=logger,
+                                   )
     return results
 
 
@@ -72,7 +57,7 @@ def merge_sites_into_messages(found_sites):
     for i in range(len(found_sites) - 1):
         found_sites_entry = ', '.join([found_sites_entry, found_sites[i + 1]])
 
-        if len(found_sites_entry) > MAX_TG_MSG_CHARS:
+        if len(found_sites_entry) >= 4096:
             found_sites_messages.append(found_sites_entry)
             found_sites_entry = ''
 
@@ -111,8 +96,7 @@ async def search(username):
     if not found_exact_accounts:
         return [], []
 
-    messages = []
-    messages += merge_sites_into_messages(found_exact_accounts)
+    messages = merge_sites_into_messages(found_exact_accounts)
 
     # full found results data
     results = list(filter(lambda x: x['status'].status == QueryStatus.CLAIMED, list(results.values())))
@@ -120,37 +104,54 @@ async def search(username):
     return messages, results
 
 
-with TelegramClient('name', API_ID, API_HASH) as client:
-    @client.on(events.NewMessage())
-    async def handler(event):
-        msg = event.message.message
+if __name__ == '__main__':
+    logging.basicConfig(
+        format='[%(filename)s:%(lineno)d] %(levelname)-3s  %(asctime)s      %(message)s',
+        datefmt='%H:%M:%S',
+        level=logging.WARNING,
+    )
 
-        # checking for username format
-        msg = msg.lstrip('@')
-        username_regexp = re.search(USERNAME_REGEXP, msg)
-        if not username_regexp:
-            await event.reply('Username must be more than 4 characters '
-                              'and can only consist of Latin letters, '
-                              'numbers, minus and underscore.')
-            return
+    bot_logger = setup_logger(logging.INFO, 'maigret-bot')
+    bot_logger.info('I am started.')
 
-        async with client.action(event.chat_id, 'typing'):
-            await event.reply(f'Searching by username `{msg}`...')
+    with TelegramClient('name', API_ID, API_HASH) as client:
+        @client.on(events.NewMessage())
+        async def handler(event):
+            msg = event.message.message
 
-        # call Maigret
-        output_messages, _ = await search(msg)
+            bot_logger.info(f'Got a message: {msg}')
 
-        if not output_messages:
-            await event.reply('No accounts found!')
-        else:
-            for output_message in output_messages:
-                try:
-                    await event.reply(output_message)
-                except Exception as e:
-                    logging.error(e, exc_info=True)
-                    await event.reply('Unexpected error has been occurred. '
-                                      f'Write a message {ADMIN_USERNAME}, he will fix it.')
+            # checking for username format
+            msg = msg.lstrip('@')
+            username_regexp = re.search(USERNAME_REGEXP, msg)
 
-    # uncomment to send you message on each script launch
-    # client.send_message(ADMIN_USERNAME, 'Go!')
-    client.run_until_disconnected()
+            if not username_regexp:
+                bot_logger.warning('Too short username!')
+                await event.reply('Username must be more than 4 characters '
+                                  'and can only consist of Latin letters, '
+                                  'numbers, minus and underscore.')
+                return
+
+            async with client.action(event.chat_id, 'typing'):
+                bot_logger.info(f'Started a search by username {msg}.')
+                await event.reply(f'Searching by username `{msg}`...')
+
+            # call Maigret
+            output_messages, sites = await search(msg)
+            bot_logger.info(f'Completed: {len(sites)} sites/results and {len(output_messages)} text messages.')
+
+            if not output_messages:
+                await event.reply('No accounts found!')
+            else:
+                for output_message in output_messages:
+                    try:
+                        await event.reply(output_message)
+                    except Exception as e:
+                        bot_logger.error(e, exc_info=True)
+                        await event.reply('Unexpected error has been occurred. '
+                                          f'Write a message {ADMIN_USERNAME}, he will fix it.')
+
+
+        # uncomment to send you message on each script launch
+        # client.send_message(ADMIN_USERNAME, 'Go!')
+        client.run_until_disconnected()

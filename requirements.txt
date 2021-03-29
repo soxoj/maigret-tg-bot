@@ -1,2 +1,2 @@
 Telethon==1.16.4
-maigret==0.1.12
+maigret>=0.1.17
