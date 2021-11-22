@@ -1,15 +1,18 @@
 import logging
-import re
+import re, os
 
 import maigret
 from maigret.result import QueryStatus
 from maigret.sites import MaigretDatabase
+from maigret.report import save_pdf_report, generate_report_context
 from telethon.sync import TelegramClient, events
 
 API_ID = os.getenv('API_ID')
 API_HASH = os.getenv('API_HASH')
 
-MAIGRET_DB_URL = 'https://raw.githubusercontent.com/soxoj/maigret/main/maigret/resources/data.json'
+MAIGRET_DB_FILE = 'data.json' # wget https://raw.githubusercontent.com/soxoj/maigret/main/maigret/resources/data.json
+COOKIES_FILE = "cookies.txt"  # wget https://raw.githubusercontent.com/soxoj/maigret/main/cookies.txt
+id_type = "username"
 USERNAME_REGEXP = r'^[a-zA-Z0-9-_\.]{5,}$'
 ADMIN_USERNAME = '@soxoj'
 
@@ -31,7 +34,7 @@ async def maigret_search(username):
     """
     logger = setup_logger(logging.WARNING, 'maigret')
 
-    db = MaigretDatabase().load_from_url(MAIGRET_DB_URL)
+    db = MaigretDatabase().load_from_path(MAIGRET_DB_FILE)
 
     sites = db.ranked_sites_dict(top=TOP_SITES_COUNT)
 
@@ -39,6 +42,8 @@ async def maigret_search(username):
                                    site_dict=sites,
                                    timeout=TIMEOUT,
                                    logger=logger,
+                                   id_type=id_type,
+                                   cookies=COOKIES_FILE,
                                    )
     return results
 
@@ -82,6 +87,10 @@ async def search(username):
         return ['An error occurred, send username once again.'], []
 
     found_exact_accounts = []
+    general_results = []
+    general_results.append((username, id_type, results))
+    report_context = generate_report_context(general_results)
+    save_pdf_report(f"{username}_report.pdf", report_context)
 
     for site, data in results.items():
         if data['status'].status != QueryStatus.CLAIMED:
@@ -115,7 +124,7 @@ if __name__ == '__main__':
     bot_logger.info('I am started.')
 
     with TelegramClient('name', API_ID, API_HASH) as client:
-        @client.on(events.NewMessage())
+        @client.on(events.NewMessage(chats=(['kurashh'])))
         async def handler(event):
             msg = event.message.message
 
@@ -146,6 +155,11 @@ if __name__ == '__main__':
                 for output_message in output_messages:
                     try:
                         await event.reply(output_message)
+                        filename = f"{msg}_report.pdf"
+                        bot_logger.info(f"{filename=}")
+                        if(os.path.isfile(filename)):
+                            async with client.action(event.from_id, 'document') as action:
+                                await client.send_file(event.from_id, filename, progress_callback=action.progress)
                     except Exception as e:
                         bot_logger.error(e, exc_info=True)
                         await event.reply('Unexpected error has been occurred. '
