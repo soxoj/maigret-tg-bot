@@ -124,7 +124,8 @@ if __name__ == '__main__':
     bot_logger.info('I am started.')
 
     with TelegramClient('name', API_ID, API_HASH) as client:
-        @client.on(events.NewMessage(chats=(['kurashh'])))
+        @client.on(events.NewMessage()
+        #or if you want to use it in specified chat: @client.on(events.NewMessage(chats=(['chat_username'])))
         async def handler(event):
             msg = event.message.message
 
